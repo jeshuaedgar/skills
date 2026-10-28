@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Create a skill from this repository's template. Requires Python 3.9+."""
+
+import argparse
+import json
+from pathlib import Path
+import re
+import sys
+
+
+ROOT = Path(__file__).resolve().parent
+
+
+def categories(directory):
+    """Yield only immediate category folders, without scanning their contents."""
+    for child in sorted(directory.iterdir()):
+        if (child.name.startswith(".") or child.is_symlink()
+                or not child.is_dir()):
+            continue
+        yield child
+
+
+def main(argv=None, root=ROOT):
+    parser = argparse.ArgumentParser(description=__doc__)
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    create = subcommands.add_parser("new", help="create a skill from templates/SKILL.md.tmpl")
+    create.add_argument("name", nargs="?", help="lowercase name using letters, digits and hyphens")
+    create.add_argument("--name", dest="skill_name", help="skill name (alternative to the positional name)")
+    create.add_argument("--category", help="existing immediate folder under skills/, e.g. engineering")
+    create.add_argument("--description", help="what the skill does and when to use it")
+    args = parser.parse_args(argv)
+    if args.name is not None and args.skill_name is not None:
+        parser.error("provide the skill name either positionally or with --name")
+
+    def ask(value, label):
+        if value is None and sys.stdin.isatty():
+            value = input(label + ": ")
+        if value is None or not value.strip():
+            parser.error(label + " is required")
+        return value.strip()
+
+    skills = root / "skills"
+    choices = [path.name for path in categories(skills)]
+    if not choices:
+        parser.error("no category directories found; create one under skills/ first")
+
+    name = ask(args.skill_name if args.skill_name is not None else args.name, "Skill name")
+    if len(name) > 63 or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+        parser.error("name must be 1-63 lowercase letters/digits with single hyphens between words")
+
+    if args.category is None and sys.stdin.isatty():
+        print("Choose a directory under skills/:")
+        for index, choice in enumerate(choices, 1):
+            print(f"  {index}. {choice}")
+    category = ask(args.category, "Directory number or path")
+    if args.category is None and category.isdigit() and 1 <= int(category) <= len(choices):
+        category = choices[int(category) - 1]
+    if category not in choices:
+        parser.error("choose an existing category: " + ", ".join(choices))
+
+    description = ask(args.description, "Description (what it does and when to use it)")
+
+    template = (root / "templates" / "SKILL.md.tmpl").read_text(encoding="utf-8")
+    values = {
+        "name": name,
+        # JSON strings are also YAML strings, including quotes and line breaks.
+        "description": json.dumps(description, ensure_ascii=False),
+        "title": name.replace("-", " ").title(),
+    }
+    content = re.sub(r"\{\{(name|description|title)\}\}",
+                     lambda match: values[match.group(1)], template)
+    destination = skills / category / name
+    try:
+        destination.mkdir()
+    except FileExistsError:
+        parser.error("already exists: " + str(destination))
+    (destination / "SKILL.md").write_text(content, encoding="utf-8")
+    print("Created " + str(destination / "SKILL.md"))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.", file=sys.stderr)
+        sys.exit(130)
+    except OSError as error:
+        print("Error: " + str(error), file=sys.stderr)
+        sys.exit(1)
